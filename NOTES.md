@@ -341,7 +341,29 @@ All 8 queries suffer from **non-SARGable** predicates (or generic plan caching i
 
 ## Task 10 — The CTO's Question
 
-_TODO: Compare integer/numeric IDs vs GUIDs (`UNIQUEIDENTIFIER`) with trade-offs._
+> *"When should we use numbers and when should we use GUIDs for IDs?"*
+
+### Trade-offs Comparison
+
+| Factor | Numbers (`INT` / `BIGINT`) | GUIDs (`UNIQUEIDENTIFIER`) |
+|---|---|---|
+| **Storage size** | **4 bytes** (`INT`) or **8 bytes** (`BIGINT`). | **16 bytes** (2×–4× larger). |
+| **Nonclustered index overhead** | Small — every nonclustered index stores the clustered key in its leaf pages, so narrow keys keep all indexes compact and cache-friendly. | Heavy — 16 bytes repeated in every nonclustered index and every foreign key column, reducing rows per 8 KB page and increasing logical reads. |
+| **Clustered index fragmentation** | Sequential (`IDENTITY` / `SEQUENCE`) inserts append to the end of the B-tree → minimal page splits and high page density. | Random `NEWID()` inserts land on random leaf pages → frequent **page splits**, fragmentation, lower page fill, and extra transaction log volume. |
+| **Distributed / offline generation** | Requires a central database round-trip (or coordinated ranges) to avoid collisions. | Globally unique without database coordination — clients, microservices, and offline apps can generate IDs before inserting. |
+| **Merging & replication** | Collisions occur when merging tables from separate databases/regions unless offset ranges are managed. | Merges across databases/shards cleanly with virtually zero collision risk. |
+| **Security & guessability** | Sequential IDs are easily enumerable in URLs (`/invoices/101`, `/invoices/102`) and leak business volume. | Non-sequential and infeasible to guess (note: GUIDs are **not** a substitute for proper authorization). |
+| **Debugging & readability** | Easy to read, type, and compare in logs and support tickets. | Hard to read or communicate verbally. |
+
+### Recommendation
+
+- **Use `INT` / `BIGINT` (Default choice for SQL Server OLTP):**
+  - Single-database applications, high-write tables, large tables with many nonclustered indexes or foreign keys (like `Invoices`, `Enrollments`, `AuditLogs`), and whenever storage efficiency and range-scan speed matter most.
+- **Use `UNIQUEIDENTIFIER` (GUIDs):**
+  - Distributed/microservices architectures, offline-first mobile/client apps that must create IDs before syncing, multi-region/sharded databases that merge data, or correlation/public tokens (e.g., `AuditLogs.CorrelationId`).
+- **Best-of-both-worlds pattern in production:**
+  - Keep a **`BIGINT IDENTITY` clustered primary key** internally for fast joins and compact indexes, and expose a separate **`UNIQUEIDENTIFIER` `PublicId`** (with a unique nonclustered index) in external APIs/URLs.
+  - If a table *must* use a GUID as its clustered key, prefer **`NEWSEQUENTIALID()`** or **UUIDv7** (time-ordered) instead of random `NEWID()` to dramatically reduce page splits while accepting the 16-byte width.
 
 ---
 
