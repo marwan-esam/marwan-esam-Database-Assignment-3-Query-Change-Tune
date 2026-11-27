@@ -239,7 +239,63 @@ Before executing the query, I predicted the following operators:
 
 ## Task 7 — Make It Faster
 
-_TODO: Document the problem and logical reads (before/after) + screenshots for `7.1`–`7.8`._
+All 8 queries suffer from **non-SARGable** predicates (or generic plan caching in `7.7`), preventing SQL Server from performing an **Index Seek** on the production indexes and forcing an **Index Scan** or **Clustered Index Scan**.
+
+### 7.1 — Users registered in March 2026
+- **Problem:** Wrapping `CreatedAtUtc` in `YEAR()` and `MONTH()` makes the predicate non-SARGable, forcing a full **Index Scan** on `IX_Users_CreatedAtUtc` (98.47% relative cost, 0.009 s, 1,054 rows).
+- **Fix:** Rewrite as a half-open range (`CreatedAtUtc >= '2026-03-01' AND CreatedAtUtc < '2026-04-01'`), enabling an **Index Seek** on `IX_Users_CreatedAtUtc` (1.53% relative cost, 0.000 s, 1,054 rows).
+- **Logical Reads:** Before = **1,012** (CPU 9 ms) | After = **15** (CPU 1 ms) — **~67× fewer reads**
+- ![7.1 Before](screenshots/task07/7.1_before.png)
+- ![7.1 After](screenshots/task07/7.1_after.png)
+
+### 7.2 — Payments of the last 30 days
+- **Problem:** Wrapping `PaidAtUtc` inside `DATEDIFF(DAY, PaidAtUtc, SYSUTCDATETIME()) <= 30` prevents seeking `IX_Payments_PaidAtUtc`, causing an **Index Scan** (88.90% relative cost, 0.013 s, 15,548 rows).
+- **Fix:** Keep `PaidAtUtc` isolated on the left side (`PaidAtUtc >= CAST(DATEADD(DAY, -30, CAST(SYSUTCDATETIME() AS DATE)) AS DATETIME2)`), turning the scan into an **Index Seek** (11.10% relative cost, 0.003 s, 15,548 rows).
+- **Logical Reads:** Before = **612** (CPU 13 ms) | After = **78** (CPU 3 ms) — **~7.8× fewer reads**
+- ![7.2 Before](screenshots/task07/7.2_before.png)
+- ![7.2 After](screenshots/task07/7.2_after.png)
+
+### 7.3 — Last names starting with `"Abd"`
+- **Problem:** `LEFT(LastName, 3) = N'Abd'` applies a function to the indexed column, causing a full **Index Scan** on `IX_Users_Email` (98.76% relative cost, 0.007 s, 839 rows).
+- **Fix:** Use a prefix pattern `LastName LIKE N'Abd%'`, which is SARGable and performs a covering **Index Seek** on `IX_Users_LastName` (1.24% relative cost, 0.000 s, 839 rows).
+- **Logical Reads:** Before = **1,283** (CPU 7 ms) | After = **20** (CPU 1 ms) — **~64× fewer reads**
+- ![7.3 Before](screenshots/task07/7.3_before.png)
+- ![7.3 After](screenshots/task07/7.3_after.png)
+
+### 7.4 — `operations.AuditLogs` arithmetic on PK
+- **Problem:** `Id + 1 = 50001` performs arithmetic on the clustered primary key `Id`, preventing a PK seek and forcing a parallel full **Index Scan** on `IX_AuditLogs_Actor` across 12M+ rows plus a `Key Lookup` on `PK_AuditLogs` (100.00% relative cost, 0.079 s, 1 row).
+- **Fix:** Move the math to the constant (`Id = 50000`), resulting in a single **Clustered Index Seek** on `PK_AuditLogs` (0.00% relative cost, 0.000 s, 1 row).
+- **Logical Reads:** Before = **130,925** (CPU 1,207 ms, elapsed 174 ms) | After = **4** (CPU 0 ms, elapsed 0 ms) — **~32,731× fewer reads**
+- ![7.4 Before](screenshots/task07/7.4_before.png)
+- ![7.4 After](screenshots/task07/7.4_after.png)
+
+### 7.5 — Implicit conversion on `InvoiceNumber`
+- **Problem:** `finance.Invoices.InvoiceNumber` is `VARCHAR(30)`, while `N'LAB-INV-2026-000001'` is `NVARCHAR`. Because `NVARCHAR` has higher type precedence, SQL Server wraps the column in `CONVERT_IMPLICIT(nvarchar(30), InvoiceNumber)` (showing the yellow warning icon on `SELECT`), forcing an **Index Scan** on `IX_Invoices_Number` + `Key Lookup` (99.18% relative cost, 0.012 s, 1 row).
+- **Fix:** Drop the `N` prefix (`'LAB-INV-2026-000001'`) so both sides are `VARCHAR`, eliminating the `CONVERT_IMPLICIT` warning and enabling an **Index Seek** on `IX_Invoices_Number` + `Key Lookup` (0.82% relative cost, 0.000 s, 1 row).
+- **Logical Reads:** Before = **747** (CPU 13 ms) | After = **6** (CPU 0 ms) — **~124.5× fewer reads**
+- ![7.5 Before](screenshots/task07/7.5_before.png)
+- ![7.5 After](screenshots/task07/7.5_after.png)
+
+### 7.6 — Unnecessary `UPPER()` under case-insensitive collation
+- **Problem:** The database collation is `SQL_Latin1_General_CP1_CI_AS` (`CI` = Case Insensitive), so `UPPER(Email)` is unnecessary and non-SARGable, forcing an **Index Scan** on `IX_Users_CreatedAtUtc` + `Key Lookup` on `PK_Users` (99.27% relative cost, 0.009 s, 1 row).
+- **Fix:** Compare directly (`Email = @Email`), enabling a covering **Index Seek** on `IX_Users_Email` with no Key Lookup (0.36% relative cost, 0.000 s, 1 row).
+- **Logical Reads:** Before = **1,015** (CPU 12 ms) | After = **3** (CPU 0 ms) — **~338× fewer reads**
+- ![7.6 Before](screenshots/task07/7.6_before.png)
+- ![7.6 After](screenshots/task07/7.6_after.png)
+
+### 7.7 — Catch-all optional search filter (`@LastName IS NULL OR LastName = @LastName`)
+- **Problem:** SQL Server must compile one reusable cached plan that works even if `@LastName` is `NULL`, so it cannot seek and instead performs an **Index Scan** on `IX_Users_Email` (98.79% relative cost, 0.009 s, 839 rows).
+- **Fix:** Add `OPTION (RECOMPILE)` so SQL Server inspects the runtime value (`N'Hassan'`), simplifies the predicate, and builds a covering **Index Seek** on `IX_Users_LastName` (1.21% relative cost, 0.000 s, 839 rows).
+- **Logical Reads:** Before = **1,283** (CPU 8 ms) | After = **18** (CPU 1 ms) — **~71× fewer reads**
+- ![7.7 Before](screenshots/task07/7.7_before.png)
+- ![7.7 After](screenshots/task07/7.7_after.png)
+
+### 7.8 — Custom example: wrapping a nullable column in `ISNULL()`
+- **Problem:** `WHERE ISNULL(PaidAtUtc, '1900-01-01') >= '2026-10-01' AND ISNULL(PaidAtUtc, '1900-01-01') < '2026-11-01'` wraps the nullable indexed column `PaidAtUtc` in `ISNULL()`, making it non-SARGable and forcing an **Index Scan** on `IX_Payments_PaidAtUtc` (89.82% relative cost, 0.010 s, 14,087 rows).
+- **Fix:** Remove `ISNULL()` (`WHERE PaidAtUtc >= '2026-10-01' AND PaidAtUtc < '2026-11-01'`). Range comparisons already exclude `NULL`s, so it returns identical rows via an **Index Seek** on `IX_Payments_PaidAtUtc` (10.18% relative cost, 0.003 s, 14,087 rows).
+- **Logical Reads:** Before = **612** (CPU 16 ms) | After = **71** (CPU 5 ms) — **~8.6× fewer reads**
+- ![7.8 Before](screenshots/task07/7.8_before.png)
+- ![7.8 After](screenshots/task07/7.8_after.png)
 
 ---
 
