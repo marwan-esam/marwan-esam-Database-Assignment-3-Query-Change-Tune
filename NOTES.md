@@ -379,7 +379,8 @@ All 8 queries suffer from **non-SARGable** predicates (or generic plan caching i
 
 ## Task 12 — The Auditors Are Coming
 
-_TODO: Brief notes on using `OUTPUT` (`DELETED` / `INSERTED`) for single-statement auditing and archiving._
+- **`12.1` (`UPDATE ... OUTPUT INTO`):** Used SQL Server's `OUTPUT` clause inside a single `UPDATE` statement to capture `DELETED.PassingScore` (old mark), `INSERTED.PassingScore` (new mark), `SYSUTCDATETIME()` (when), and `SUSER_SNAME()` (by whom) directly into `academic.CoursePassMarkHistory`. Because both the update and the audit insert happen in one atomic statement, no change can ever be missed or desynchronized.
+- **`12.2` (`DELETE ... OUTPUT INTO`):** Used a single `DELETE` statement with `OUTPUT DELETED.* INTO communication.AnnouncementsArchive` for rows where `ExpiresAtUtc < DATEADD(MONTH, -6, SYSUTCDATETIME())` (which also safely excludes `NULL` expiration dates). Every deleted row is archived atomically in the same statement without needing a separate `INSERT` + `DELETE` pair.
 
 ---
 
