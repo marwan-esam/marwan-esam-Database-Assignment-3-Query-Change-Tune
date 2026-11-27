@@ -386,4 +386,12 @@ All 8 queries suffer from **non-SARGable** predicates (or generic plan caching i
 
 ## Task 13 — The Nightly Website Sync
 
-_TODO: Brief notes on the single-statement `MERGE` sync and verification across all 3 runs._
+- **Design (`MERGE` + `OUTPUT $action`):** Created `dbo.WebsiteCourseCatalog` with an `IsVisible` flag and synchronized it against `academic.Courses` in a **single `MERGE` statement** with four guarded branches:
+  1. `WHEN NOT MATCHED BY TARGET AND src.IsActive = 1` → inserts newly added active courses (`IsVisible = 1`).
+  2. `WHEN MATCHED AND src.IsActive = 1 AND (Code/Title/CreditHours changed OR IsVisible = 0)` → updates changed metadata (or re-shows a reactivated course) only when a real difference exists.
+  3. `WHEN MATCHED AND src.IsActive = 0 AND tgt.IsVisible = 1` → hides deactivated courses (`IsVisible = 0`) without ever deleting them.
+  4. `WHEN NOT MATCHED BY SOURCE AND tgt.IsVisible = 1` → hides any course removed from the source without deleting it.
+- **Verification across 3 runs:**
+  - **Run 1:** Inserts all active courses into `dbo.WebsiteCourseCatalog` (`OUTPUT $action` reports `INSERT` for each).
+  - **Run 2 (after renaming `DSAI-101` and deactivating one active course):** Reports **exactly 2 `UPDATE` rows** — one updating the renamed title and one setting `IsVisible = 0` for the deactivated course.
+  - **Run 3 (immediate re-run with no changes):** Changes **0 rows** (`OUTPUT` is empty), proving the sync is fully **idempotent** because every `UPDATE` branch guards against no-op writes.
