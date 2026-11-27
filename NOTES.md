@@ -369,7 +369,11 @@ All 8 queries suffer from **non-SARGable** predicates (or generic plan caching i
 
 ## Task 11 — End of Semester Changes
 
-_TODO: Brief notes on `11.1`–`11.5` (including `TRUNCATE TABLE` vs `DELETE`)._
+- **`11.1`:** Updated `PassingScore` to `65.00` for all `DSAI` courses using a scalar subquery on `academic.Departments` (no `JOIN`).
+- **`11.2`:** Assigned letter grades (`A` ≥ 90, `B` ≥ 80, `C` ≥ 70, `D` ≥ 60, `F` < 60) via a `CASE` expression for all finished enrollments (`CompletedAtUtc IS NOT NULL AND FinalScore IS NOT NULL`).
+- **`11.3`:** Removed the `TEACHING_ASSISTANT` role from `[identity].Roles` via `DELETE`.
+- **`11.4` (`TRUNCATE TABLE` vs `DELETE`):** Emptied `finance.PaymentStaging` using **`TRUNCATE TABLE`** because it deallocates whole data pages with minimal transaction log writes (instead of logging every deleted row one by one like `DELETE`), resets `IDENTITY` seeds, and is dramatically faster for nightly staging tables.
+- **`11.5`:** Safely dropped all practice tables (`finance.PaymentStaging` and `dbo.SpillDemo`) using `DROP TABLE IF EXISTS` so the script never errors if a table was already removed.
 
 ---
 
