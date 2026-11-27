@@ -99,13 +99,13 @@ OPTION (RECOMPILE);
 
 
 -- 7.8
--- Slow (wrapping nullable PaidAtUtc in ISNULL() prevents seeking IX_Payments_PaidAtUtc)
+-- Slow
 SELECT Id, InvoiceId, Amount
 FROM finance.Payments
 WHERE ISNULL(PaidAtUtc, '1900-01-01') >= '2026-10-01'
   AND ISNULL(PaidAtUtc, '1900-01-01') <  '2026-11-01';
 
--- Fast (direct half-open range excludes NULLs and uses an Index Seek on IX_Payments_PaidAtUtc)
+-- Fast
 SELECT Id, InvoiceId, Amount
 FROM finance.Payments
 WHERE PaidAtUtc >= '2026-10-01'

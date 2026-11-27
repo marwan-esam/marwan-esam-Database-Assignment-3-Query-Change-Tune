@@ -301,7 +301,22 @@ All 8 queries suffer from **non-SARGable** predicates (or generic plan caching i
 
 ## Task 8 — When the Estimate Is Wrong
 
-_TODO: Explain the tempdb sort spill, why it happened, what spill level means, why it is slow, and how fixing the cause removes the warning._
+### 1. Before Fix — Sort Spill Warning
+![Sort Spill Warning](screenshots/task08/08_spill_warning.png)
+
+- **What happened:** The `Sort` operator displays a yellow warning triangle (`Operator used tempdb to spill data during execution`). SQL Server estimated only **~81 rows** (`0.1%` selectivity) and granted the minimum memory (~1 MB), but **80,001 rows** actually arrived at runtime.
+- **Why it happened (Root Cause):** Statistics on `dbo.SpillDemo (SortKey)` were **stale** (`NORECOMPUTE` froze the histogram when only 1 out of 1,000 rows had `SortKey = 1`, before 80,000 more `SortKey = 1` rows were loaded). Because SQL Server computes memory grants *before* execution using estimated row count × estimated row size, a severe underestimate produces a tiny memory grant that overflows at runtime.
+- **What the spill level means:**
+  - **Spill Level 1:** Data did not fit in the memory grant, so SQL Server wrote sorted runs out to `tempdb` and merged them in a single pass.
+  - **Spill Level 2 (or higher):** Even the merge pass could not fit in memory, forcing **multiple** read/write passes over `tempdb` — significantly slower than Level 1.
+- **Why a `tempdb` spill is slow:**
+  - RAM access is nanoseconds; `tempdb` resides on storage and incurs disk I/O latency, extra `Worktable` writes and reads, `tempdb` allocation page contention (`PFS`/`GAM`/`SGAM`), and extra CPU to serialize/deserialize and merge runs.
+
+### 2. After Fix — Updated Statistics (Warning Gone)
+![Sort Fixed No Warning](screenshots/task08/08_fixed_no_warning.png)
+
+- **Fix:** Ran `UPDATE STATISTICS dbo.SpillDemo WITH FULLSCAN;` so the `SortKey` histogram reflects all **80,001** matching rows.
+- **Result:** On re-execution, SQL Server accurately estimated 80,001 rows (100%), allocated a sufficient memory grant up front, completed the entire `Sort` in RAM, and the yellow spill warning disappeared completely.
 
 ---
 
