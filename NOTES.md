@@ -322,7 +322,20 @@ All 8 queries suffer from **non-SARGable** predicates (or generic plan caching i
 
 ## Task 9 — One of Each
 
-_TODO: Explain the `DISTINCT` operator chosen on the unindexed column, the cheaper alternative and what it requires, and the plan on an already-unique column._
+### 1. `DISTINCT` on an Unindexed Column (`Category`)
+![Distinct No Index](screenshots/task09/09_distinct_no_index.png)
+
+- **Operator SQL Server used:** **`Hash Match (Aggregate)`** (after a `Clustered Index Scan` on `dbo.SpillDemo`).
+- **How `Hash Match (Aggregate)` works:** SQL Server scans all rows of `dbo.SpillDemo`, computes a hash of each `Category` value, and inserts it into an in-memory hash table. If the value already exists in the bucket, it is discarded as a duplicate; otherwise it is added. Once the scan completes, SQL Server outputs one row per unique entry. Because it builds a hash table in RAM, it requires a **memory grant** (and can spill to `tempdb` if there are far more distinct values than estimated).
+- **The cheaper operator SQL Server did NOT use:** **`Stream Aggregate`**.
+  - **How `Stream Aggregate` works:** It streams through rows one at a time, comparing each row only with the immediately preceding row. Whenever the value changes, it emits the new distinct value. It requires **no memory grant** (O(1) memory) and is **non-blocking**.
+  - **What the data would need for SQL Server to use it:** The input rows must arrive **already sorted** by `Category` — for example, by creating a nonclustered index on `dbo.SpillDemo (Category)`. Without that index, the rows are unordered on `Category`, so SQL Server avoids sorting 81,000 rows and chooses `Hash Match (Aggregate)` instead.
+
+### 2. `DISTINCT` on an Already-Unique Column (`Id`)
+![Distinct Unique Column](screenshots/task09/09_distinct_unique_column.png)
+
+- **Plan produced:** A plain **`Clustered Index Scan`** on `PK_SpillDemo` directly into **`SELECT`** — with **no `Hash Match`, no `Stream Aggregate`, and no `Sort`**!
+- **Why:** `Id` is the `PRIMARY KEY` of `dbo.SpillDemo`, so SQL Server's optimizer knows from schema metadata that every value is already guaranteed unique. During query simplification, the optimizer **completely eliminates the redundant `DISTINCT` operation** at zero runtime cost.
 
 ---
 
